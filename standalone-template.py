@@ -1,6 +1,6 @@
 from pyrogram import Client, idle, filters
 from pyrogram.types import Message
-from asyncio import get_event_loop, sleep
+from asyncio import get_event_loop
 from os import environ as env
 from logging import basicConfig, INFO
 
@@ -8,6 +8,8 @@ from aiohttp import ClientSession as aiohttpClient
 from aiofiles.tempfile import TemporaryDirectory
 from aiofiles import open
 import ujson
+from math import ceil
+from aiostream import stream
 
 url = "https://danbooru.donmai.us"
 basicConfig(level=INFO)
@@ -21,7 +23,15 @@ async def main():
     await app.start()
     await idle()
 
-async def danbooru(url):
+async def get(url: str, iterator: int=1):
+    async with aiohttpClient(json_serialize=ujson.dumps) as session:
+        for page in range(iterator):
+            async with session.get(url) as resp:
+                if resp.status != 500:
+                    yield resp
+
+
+async def search(url: str):
     async with aiohttpClient(json_serialize=ujson.dumps) as session:
         async with session.get(url) as resp:
             if resp.status == 500:
@@ -29,30 +39,32 @@ async def danbooru(url):
             else:
                 return await resp.json()
 
+
 @app.on_message(filters.command("get"))
 async def givemethesauce(_, msg: Message):
     try:
-        match = [ i for i in await danbooru(f"{url}/tags.json?search[name_or_alias_matches]={msg.command[1]}") ][0]
+        match = (await search(f"{url}/tags.json?search[name_or_alias_matches]={msg.command[1]}"))[0]
     except IndexError:
         match = None
         await msg.reply_text("404: Not Found")
     
     if match:
-        post_count = match["post_count"]
+        POST_LIMIT = 200
+        post_count = ceil(match["post_count"]/POST_LIMIT)
         name = match["name"]
-        page = 1
         async with TemporaryDirectory() as tempdir:
             async with open(f"{tempdir}/sauce.txt", 'w') as f:
-                while post_count > 0:
-                    chunk = await danbooru(f"{url}/posts.json?tags={name}&limit=200&page={page}")
-
-                    for obj in chunk:
-                        file_url = obj.get("file_url")
-                        if file_url:
-                            await f.write(f"{file_url}\n")
-                    page += 1
-                    post_count -= 200
-                    print(f"post_count: {post_count}")
+                async for resp in get(
+                    f"""{url}/posts.json?
+                    tags={name}&limit=200""",
+                    post_count
+                ):
+                    async with stream.iterate(
+                        await resp.json()
+                    ).stream() as streamer:
+                        async for post in streamer:
+                            if post.get('file_url'):
+                                await f.write(f"{post.get('file_url')}\n")
                 await f.close()
                 await msg.reply_document(f.name)
                 
