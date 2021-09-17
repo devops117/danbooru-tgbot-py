@@ -24,7 +24,10 @@ async def main():
 async def danbooru(url):
     async with aiohttpClient(json_serialize=ujson.dumps) as session:
         async with session.get(url) as resp:
-            return await resp.json()
+            if resp.status == 500:
+                return []
+            else:
+                return await resp.json()
 
 @app.on_message(filters.command("get"))
 async def givemethesauce(_, msg: Message):
@@ -37,16 +40,17 @@ async def givemethesauce(_, msg: Message):
     if match:
         post_count = match["post_count"]
         name = match["name"]
-        i = 1
+        page = 1
         async with TemporaryDirectory() as tempdir:
             async with open(f"{tempdir}/sauce.txt", 'w') as f:
-                while post_count >= 0:
-                    z = await danbooru(f"{url}/posts.json?tags={name}&limit=200&page={i}")
-                    for j in z:
-                        x = j.get("file_url")
-                        if x:
-                            await f.write(f"{x}\n")
-                    i+=1
+                while post_count > 0:
+                    chunk = await danbooru(f"{url}/posts.json?tags={name}&limit=200&page={page}")
+
+                    for obj in chunk:
+                        file_url = obj.get("file_url")
+                        if file_url:
+                            await f.write(f"{file_url}\n")
+                    page += 1
                     post_count -= 200
                     print(f"post_count: {post_count}")
                 await f.close()
