@@ -1,5 +1,5 @@
 import asyncio
-from os import environ as env, cpu_count
+from os import environ as env
 from logging import basicConfig, INFO
 from math import ceil
 from typing import Optional
@@ -27,11 +27,14 @@ PER_PAGE_POST_LIMIT=200
 RESULT_LIMIT=10
 PAGE_LIMIT=1000
 POST_LIMIT=PER_PAGE_POST_LIMIT*PAGE_LIMIT
-MASTER_QUEUE = asyncio.Queue(maxsize=27)
+MASTER_QUEUE=asyncio.Queue(maxsize=27)
 
 
-async def get_data(url: str, params: dict, session: aiohttp.client.ClientSession,
-        queue: asyncio.queues.Queue) -> None:
+async def get_data(
+        url: str, params: dict,
+        session: aiohttp.client.ClientSession,
+        queue: asyncio.queues.Queue,
+    ) -> None:
     """
     Fires session.get()
     Puts json from response in queue
@@ -45,7 +48,6 @@ async def get_data(url: str, params: dict, session: aiohttp.client.ClientSession
     """
     try:
         async with session.get(f"{url}", params=params) as resp:
-            print(f"RESP_URL: {resp.url}")
             await queue.put(await resp.json(loads=ujson.loads))
     except aiohttp.errors.ClientResponseError as e:
         if e.status == 500:
@@ -55,15 +57,22 @@ async def get_data(url: str, params: dict, session: aiohttp.client.ClientSession
 
 
 async def async_task_setter(
-        url: str, params: dict, session: aiohttp.client.ClientSession,
-        queue: asyncio.queues.Queue, iterator: range) -> None:
+        url: str, params: dict,
+        session: aiohttp.client.ClientSession,
+        queue: asyncio.queues.Queue, iterator: range,
+    ) -> None:
     """
     Puts tasks in MASTER_QUEUE,
     fires get_data()
     """
     for page in iterator:
         params.update({"page": page})
-        await MASTER_QUEUE.put(asyncio.create_task(get_data(url, params.copy(), session, queue)))
+        await MASTER_QUEUE.put(
+            asyncio.create_task(
+                get_data(url, params.copy(),
+                    session, queue)
+            )
+        )
     await MASTER_QUEUE.put(None)
 
 
@@ -80,7 +89,8 @@ async def async_task_getter() -> None:
 
 async def crawler(
         url: str, *,
-        params: Optional[dict] = None, queue: Optional[asyncio.queues.Queue] = None,
+        params: Optional[dict] = None,
+        queue: Optional[asyncio.queues.Queue] = None,
         iterator: Optional[range] = None,
     ) -> Optional[aiohttp.client_reqrep.ClientResponse]:
     """
@@ -90,20 +100,33 @@ async def crawler(
     fires async_task setter and getter
     Otherwise it fires a session.get()
     """
-    async with aiohttp.ClientSession(json_serialize=ujson.dumps, raise_for_status=True) as session:
+    async with aiohttp.ClientSession(
+        json_serialize=ujson.dumps,
+        raise_for_status=True
+    ) as session:
         if iterator:
             if params is None:
                 params={}
             tasks = [
-                        asyncio.create_task(async_task_setter(url, params, session, queue, iterator)),
-                        asyncio.create_task(async_task_getter()),
+                        asyncio.create_task(
+                            async_task_setter(
+                                url, params, session,
+                                queue, iterator)
+                        ),
+                        asyncio.create_task(
+                            async_task_getter()
+                        ),
                     ]
             await asyncio.gather(*tasks)
             await queue.put(None)
         else:
-            async with session.get(url, params=params) as resp:
+            async with session.get(url,
+                    params=params) as resp:
                 if resp.status == 500:
-                    return await get(url, range(page, iterator.step, iterator.stop))
+                    return await get(url, range(
+                            page, iterator.step,
+                            iterator.stop)
+                        )
                 return await resp.json(loads=ujson.loads)
 
 
@@ -116,7 +139,10 @@ async def search(_, msg: Message) -> None:
     """
     resp_json = await crawler(
         f"{DANBOORU_URL}/tags.json",
-        params={"search[name_or_alias_matches]": msg.command[1], "limit": RESULT_LIMIT},
+        params={
+            "search[name_or_alias_matches]": msg.command[1],
+            "limit": RESULT_LIMIT,
+        },
     )
     keyb_data = [
         [
@@ -135,7 +161,10 @@ async def search(_, msg: Message) -> None:
     else: await msg.reply_text("Not found.")
 
 
-async def extract_data(queue: asyncio.queues.Queue, file: aiofiles.threadpool.text.AsyncTextIOWrapper) -> None:
+async def extract_data(
+        queue: asyncio.queues.Queue,
+        file: aiofiles.threadpool.text.AsyncTextIOWrapper
+    ) -> None:
     """
     Gets response from queue
     Extracts data from response
@@ -166,7 +195,8 @@ async def givemethesauce(_, query: CallbackQuery) -> None:
     page_count = ceil(int(callback_data[2])/POST_LIMIT) if int(callback_data[2])<=POST_LIMIT else DANBOORU_PAGE_LIMIT
     queue = asyncio.Queue()
     async with aiofiles.tempfile.TemporaryDirectory() as tempdir:
-        async with aiofiles.open(f"{tempdir}/sauce-{name}.txt", 'w') as file:
+        async with aiofiles.open(
+                f"{tempdir}/sauce-{name}.txt", 'w') as file:
             tasks = [
                         asyncio.create_task(crawler(
                             f"{DANBOORU_URL}/posts.json",
@@ -174,7 +204,8 @@ async def givemethesauce(_, query: CallbackQuery) -> None:
                             params={"tags": name, "limit": PER_PAGE_POST_LIMIT},
                             iterator=range(page_count),
                         )),
-                        asyncio.create_task(extract_data(queue, file)),
+                        asyncio.create_task(
+                            extract_data(queue, file)),
                     ]
             await asyncio.gather(*tasks)
             await file.close()
