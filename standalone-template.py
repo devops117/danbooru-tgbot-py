@@ -1,121 +1,90 @@
-from pyrogram import Client, idle, filters
-from pyrogram.types import Message, InlineKeyboardButton, InlineKeyboardMarkup, CallbackQuery
-from asyncio import get_event_loop, gather, sleep
 from os import environ as env, cpu_count
 from logging import basicConfig, INFO
-from aiohttp import ClientSession as aiohttpClient
+from math import ceil
+
+from pyrogram import Client, idle, filters
+from pyrogram.types import Message, InlineKeyboardButton, InlineKeyboardMarkup, CallbackQuery
+
+import ujson
+import aiohttp
 from aiofiles.tempfile import TemporaryDirectory
 from aiofiles import open
-import ujson
-from math import ceil, gcd
-from aiostream import stream
 
 
-url = "https://danbooru.donmai.us"
+DANBOORU_URL = "https://danbooru.donmai.us"
 basicConfig(level=INFO)
 # maybe use ":memory:"
-app = Client("test",
-        int(env.get("api_id")),
-        env.get("api_hash"),
-        bot_token=env.get("bot_token"))
+app = Client(
+    session_name="test",
+    api_id=int(env.get("TELEGRAM_API_ID")),
+    api_hash=env.get("TELEGRAM_API_HASH"),
+    bot_token=env.get("TELEGRAM_BOT_TOKEN"),
+)
 
 
-async def main():
-    await app.start()
-    await idle()
+POST_LIMIT = 200
+RESULT_LIMIT=10
 
 
-async def get(url: str, iterator: range=range(0)):
-    async with aiohttpClient(json_serialize=ujson.dumps) as session:
+async def get(url: str, *, params: dict=None, iterator: range=None):
+    async with aiohttp.ClientSession(json_serialize=ujson.dumps) as session:
         if iterator:
+            if params is None:
+                params={}
             for page in iterator:
-                async with session.get(
-                    f"{url}&page={page}"
-                ) as resp:
+                params.update({"page": page})
+                async with session.get(f"{url}", params=params) as resp:
                     if resp.status == 500:
                         async for resp in get(url, range(page, iterator.step, iterator.stop)):
                             yield resp
                     else:
                         yield resp
         else:
-            async with session.get(url) as resp:
+            async with session.get(url, params=params) as resp:
                 if resp.status != 500:
                     yield resp
 
 
 @app.on_message(filters.command("get"))
 async def searchthestuff(_, msg: Message):
-    RESULT_LIMIT=10
-    async for resp in (
-        get(f"{url}/tags.json?search[name_or_alias_matches]={msg.command[1]}")
-    ):
-        async with stream.chunks(
-            stream.map(
-                stream.iterate(
-                    await resp.json()
-                ),
-                lambda x: [InlineKeyboardButton(
-                    text=f"{x['name']}--{x['post_count']}",
-                    callback_data=f"owo--{x['name']}--{x['post_count']}"
-                )]
-            ),
-            RESULT_LIMIT
-        ).stream() as streamer:
-            async for i in streamer:
-                await msg.reply_text(
-                    "search results:",
-                    reply_markup=InlineKeyboardMarkup(i)
-                )
-
-
-async def IO(page_count, name, file):
     async for resp in get(
-        f"{url}/posts.json?tags={name}&limit=200",
-        page_count
+        f"{DANBOORU_URL}/tags.json",
+        params={"search[name_or_alias_matches]": msg.command[1], "limit": RESULT_LIMIT},
     ):
-        async with stream.iterate(
-            await resp.json()
-        ).stream() as streamer:
-            async for post in streamer:
-                if type(post)==dict and post.get('file_url'):
-                    await file.write(f"{post.get('file_url')}\n")
+        keyb_data = [
+            [
+                InlineKeyboardButton(
+                    text=f"{post['name']}--{post['post_count']}",
+                    callback_data=f"owo--{post['name']}--{post['post_count']}",
+                )
+            ]
+            for post in ujson.loads(await resp.text()) if post['post_count'] != 0
+        ]
+        await msg.reply_text(
+            text="search results:",
+            reply_markup=InlineKeyboardMarkup(keyb_data),
+        )
 
 
 @app.on_callback_query(filters.regex("^owo"))
 async def givemethesauce(_, query: CallbackQuery):
-   async with TemporaryDirectory() as tempdir:
-        match = query.data.split("--")
-        name = match[1]
+    match = query.data.split("--")
+    name = match[1]
+    page_count = ceil(int(match[2])/POST_LIMIT) if int(match[2])<=200_000 else 1000 # 200_000 posts is danbooru limit, 1000 pages is max
+    async with TemporaryDirectory() as tempdir:
         async with open(f"{tempdir}/sauce-{name}.txt", 'w') as file:
-            POST_LIMIT = 200
-            tasks = []
-            start = 1
-            page_count = ceil(int(match[2])/POST_LIMIT) if int(match[2])<=200_000 else 1000
-            cpu_count_ = cpu_count() # gcd(cpu_count())
-            corus = page_count%cpu_count_
-            if corus:
-                corus = gcd(ceil(page_count-(page_count%cpu_count_)), cpu_count_)+1
-                diff = ceil((page_count-(page_count%cpu_count_))/cpu_count_)+1
-            else:
-                corus = cpu_count_
-                diff = page_count//cpu_count_
-
-            for task_id in range(1, corus+1):
-                if task_id*diff+1 > page_count:
-                    tasks+=[loop.create_task(IO(
-                        range(start, page_count+1),
-                        name, file))]
-                    break
-                else:
-                    tasks+=[loop.create_task(IO(
-                        range(start, task_id*diff+1),
-                        name, file))]
-                    start+=diff
-
-            await gather(*tasks)
+            async for resp in get(
+                f"{DANBOORU_URL}/posts.json",
+                params={"tags": name, "limit": POST_LIMIT},
+                iterator=range(page_count)
+            ):
+                for post in ujson.loads(await resp.text()):
+                    if isinstance(post, dict):
+                        file_url = post.get('file_url')
+                        if file_url:
+                            await file.write(f"{file_url}\n")
             await file.close()
             await query.message.reply_document(file.name)
 
 
-loop = get_event_loop()
-loop.run_until_complete(main())
+app.run()

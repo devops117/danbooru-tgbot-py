@@ -1,0 +1,5 @@
+aiofiles
+aiohttp[speedups]
+pyrogram
+tgcrypto
+ujson
