@@ -1,6 +1,7 @@
 from os import environ as env, cpu_count
 from logging import basicConfig, INFO
 from math import ceil
+from typing import Optional
 
 from pyrogram import Client, idle, filters
 from pyrogram.types import Message, InlineKeyboardButton, InlineKeyboardMarkup, CallbackQuery
@@ -26,7 +27,7 @@ POST_LIMIT = 200
 RESULT_LIMIT=10
 
 
-async def get(url: str, *, params: dict=None, iterator: range=None):
+async def get(url: str, *, params: Optional[dict] = None, iterator: Optional[range] = None) -> aiohttp.client_reqrep.ClientResponse:
     async with aiohttp.ClientSession(json_serialize=ujson.dumps) as session:
         if iterator:
             if params is None:
@@ -46,7 +47,7 @@ async def get(url: str, *, params: dict=None, iterator: range=None):
 
 
 @app.on_message(filters.command("get"))
-async def searchthestuff(_, msg: Message):
+async def searchthestuff(_, msg: Message) -> None:
     async for resp in get(
         f"{DANBOORU_URL}/tags.json",
         params={"search[name_or_alias_matches]": msg.command[1], "limit": RESULT_LIMIT},
@@ -58,16 +59,18 @@ async def searchthestuff(_, msg: Message):
                     callback_data=f"owo--{post['name']}--{post['post_count']}",
                 )
             ]
-            for post in ujson.loads(await resp.text()) if post['post_count'] != 0
+            for post in await resp.json(loads=ujson.loads) if post['post_count'] != 0
         ]
-        await msg.reply_text(
-            text="search results:",
-            reply_markup=InlineKeyboardMarkup(keyb_data),
-        )
+        if keyb_data:
+            await msg.reply_text(
+                text="search results:",
+                reply_markup=InlineKeyboardMarkup(keyb_data),
+            )
+        else: await msg.reply_text("Not found.")
 
 
 @app.on_callback_query(filters.regex("^owo"))
-async def givemethesauce(_, query: CallbackQuery):
+async def givemethesauce(_, query: CallbackQuery) -> None:
     match = query.data.split("--")
     name = match[1]
     page_count = ceil(int(match[2])/POST_LIMIT) if int(match[2])<=200_000 else 1000 # 200_000 posts is danbooru limit, 1000 pages is max
@@ -78,7 +81,7 @@ async def givemethesauce(_, query: CallbackQuery):
                 params={"tags": name, "limit": POST_LIMIT},
                 iterator=range(page_count)
             ):
-                for post in ujson.loads(await resp.text()):
+                for post in await resp.json(loads=ujson.loads):
                     if isinstance(post, dict):
                         file_url = post.get('file_url')
                         if file_url:
