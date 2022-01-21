@@ -1,5 +1,6 @@
-aiofiles
-aiohttp[speedups]
 pyrogram
 tgcrypto
+aiohttp[speedups]
+aiofiles
 ujson
+#uvloop # uncomment if it works for you
