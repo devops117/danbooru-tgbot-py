@@ -27,13 +27,13 @@ PER_PAGE_POST_LIMIT=200
 RESULT_LIMIT=10
 PAGE_LIMIT=1000
 POST_LIMIT=PER_PAGE_POST_LIMIT*PAGE_LIMIT
-MASTER_QUEUE=asyncio.Queue(maxsize=27)
+MASTER_QUEUE=asyncio.Queue(maxsize=3)
 SPLITTER="--"
 
 
 class DanbooruPageData:
     def __init__(
-                self, *
+                self, *,
                 page_range: range,
                 queue: asyncio.queues.Queue,
                 master_queue: asyncio.queues.Queue,
@@ -90,7 +90,7 @@ async def async_task_setter(
 
 async def async_task_getter(page_data) -> None:
     """
-    waits on a task taken from MASTER_QUEUE
+    waits on a task taken from master_queue
     """
     while True:
         task = await page_data.master_queue.get()
@@ -129,7 +129,7 @@ async def crawler(
                         ),
                     ]
             await asyncio.gather(*tasks)
-            await queue.put(None)
+            await page_data.queue.put(None)
         else:
             async with session.get(url, params=params) as resp:
                 if resp.status == 500:
@@ -198,15 +198,14 @@ async def givemethesauce(_, query: CallbackQuery) -> None:
     Makes sauce file in a TemporaryDirectory
     Fires of crawler() and extract_data()
     Replies the document containing sauce
-
     """
-    name, page_count = query.data.split(SPLITTER)
+    _, name, page_count = query.data.split(SPLITTER)
     page_count = int(page_count)
-    if page_count<=POST_LIMIT: page_count = PAGE_LIMIT
-    else: page_count = ceil(page_count/POST_LIMIT)
+    if page_count>=POST_LIMIT: page_count = PAGE_LIMIT
+    else: page_count = ceil(page_count/PER_PAGE_POST_LIMIT)
     queue = asyncio.Queue()
     page_data=DanbooruPageData(
-            page_range=range(post_count),
+            page_range=range(page_count),
             queue=queue,
             master_queue=MASTER_QUEUE,
         )
